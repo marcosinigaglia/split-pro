@@ -1,5 +1,5 @@
-// filepath: /home/wiktor/kod/split-pro/src/utils/number.test.ts
-import { getCurrencyHelpers } from '../utils/numbers';
+// Filepath: /home/wiktor/kod/split-pro/src/utils/number.test.ts
+import { currencyConversion, getCurrencyHelpers } from '../utils/numbers';
 
 describe('getCurrencyHelpers', () => {
   describe('toUIString', () => {
@@ -31,6 +31,11 @@ describe('getCurrencyHelpers', () => {
           expect(toUIString(value)).toBe('$1,234');
         });
 
+        it('Should correctly format single digit cent amounts', () => {
+          const value = 7n;
+          expect(toUIString(value)).toBe('$0.07');
+        });
+
         it.each([
           [12345n, '$123.45'],
           [-12345n, '-$123.45'],
@@ -40,6 +45,15 @@ describe('getCurrencyHelpers', () => {
           [-99999999999999999999999999999n, '-$999,999,999,999,999,999,999,999,999.99'],
         ])('should format %p as %p with signed flag', (value, expected) => {
           expect(toUIString(value, true)).toBe(expected);
+        });
+
+        it.each([
+          [12345n, '123.45'],
+          [-12345n, '-123.45'],
+          [-50n, '-0.5'],
+          [-0n, '0'],
+        ])('should format %p as %p with signed flag and hideSymbol', (value, expected) => {
+          expect(toUIString(value, true, true)).toBe(expected);
         });
       });
       describe('JPY (no decimals)', () => {
@@ -167,5 +181,62 @@ describe('getCurrencyHelpers', () => {
     ])('should sanitize %p to %p with signed flag', (input, expected) => {
       expect(sanitizeInput(input, true)).toBe(expected);
     });
+  });
+
+  describe('parseToCleanString', () => {
+    const { parseToCleanString } = getCurrencyHelpers({
+      locale: 'en-US',
+      currency: 'USD',
+    });
+
+    it.each([
+      ['-200', '-200'],
+      ['-200.01', '-200.01'],
+      ['--200', '-200'],
+      ['-$200.00', '-200.00'],
+    ])('should keep the minus sign for %p with signed flag', (input, expected) => {
+      expect(parseToCleanString(input, true)).toBe(expected);
+    });
+
+    it.each([
+      [-20000n, '-200.00'],
+      [-12345n, '-123.45'],
+      [-50n, '-0.50'],
+      [-0n, '0.00'],
+    ])('should keep the minus sign for bigint %p with signed flag', (value, expected) => {
+      expect(parseToCleanString(value, true)).toBe(expected);
+    });
+
+    it.each([
+      ['-200', '200'],
+      ['-123.45', '123.45'],
+    ])('should drop the minus sign for %p without signed flag', (input, expected) => {
+      expect(parseToCleanString(input)).toBe(expected);
+    });
+  });
+});
+
+describe('currencyConversion', () => {
+  it('handles increasing decimal digit conversions', () => {
+    const from = 'JPY'; // 0 decimal digits
+    const to = 'USD';
+    const amount = 12345n; // 12345 JPY
+    const rate = 0.0073; // 1 JPY = 0.0073 USD
+
+    const res = currencyConversion({ from, to, amount, rate });
+
+    // 12345 JPY * 0.0073 = 90.1185 USD -> rounded to 90.12 USD -> 9012 in bigint
+    expect(res).toBe(9012n);
+  });
+
+  it('handles decreasing decimal digit conversions', () => {
+    const from = 'USD'; // 2 decimal digits
+    const to = 'JPY';
+    const amount = 9012n;
+    const rate = 1 / 0.0073;
+
+    const res = currencyConversion({ from, to, amount, rate });
+
+    expect(res).toBe(12345n);
   });
 });

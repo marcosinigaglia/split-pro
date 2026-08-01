@@ -3,15 +3,14 @@ import { type inferRouterOutputs } from '@trpc/server';
 import Image from 'next/image';
 import Link from 'next/link';
 import React from 'react';
-import {
-  CategoryIcon,
-  CURRENCY_CONVERSION_ICON as CurrencyConversionIcon,
-  SETTLEUP_ICON as SettleUpIcon,
-} from '~/components/ui/categoryIcons';
 import type { ExpenseRouter } from '~/server/api/routers/expense';
 import { useTranslationWithUtils } from '~/hooks/useTranslationWithUtils';
 import { api } from '~/utils/api';
 import { useRouter } from 'next/router';
+import { toast } from 'sonner';
+import { CategoryIcon, CurrencyConversionIcon, SettleupIcon } from '~/components/ui/categoryIcons';
+import { cn } from '~/lib/utils';
+import { Separator } from '../ui/separator';
 
 type ExpensesOutput =
   | inferRouterOutputs<ExpenseRouter>['getGroupExpenses']
@@ -35,25 +34,54 @@ export const ExpenseList: React.FC<{
     return <NoExpenses />;
   }
 
+  const { i18n } = useTranslationWithUtils();
+
+  let lastDate: Date | null = null;
+
   return (
-    <>
+    <div className="flex flex-col gap-3">
       {expenses.map((e) => {
+        const currentDate = e.expenseDate;
+        let isFirstOfMonth = false;
+
+        if (
+          lastDate === null ||
+          currentDate.getMonth() !== lastDate.getMonth() ||
+          currentDate.getFullYear() !== lastDate.getFullYear()
+        ) {
+          isFirstOfMonth = true;
+        }
+
+        lastDate = currentDate;
+
         const isSettlement = e.splitType === SplitType.SETTLEMENT;
         const isCurrencyConversion = e.splitType === SplitType.CURRENCY_CONVERSION;
 
         return (
-          <Link
-            href={`/${isGroup ? 'groups' : 'balances'}/${contactId}/expenses/${e.id}`}
-            key={e.id}
-            className="flex items-center justify-between py-2"
-          >
-            {isSettlement && <Settlement e={e} userId={userId} />}
-            {isCurrencyConversion && <CurrencyConversion e={e} userId={userId} />}
-            {!isSettlement && !isCurrencyConversion && <Expense e={e} userId={userId} />}
-          </Link>
+          <React.Fragment key={e.id}>
+            {isFirstOfMonth && (
+              <div className="flex flex-row items-center gap-4 pt-2">
+                <div className="text-xs font-medium text-gray-700 uppercase">
+                  {new Intl.DateTimeFormat(i18n.language, {
+                    month: 'long',
+                    year: 'numeric',
+                  }).format(currentDate)}
+                </div>
+                <Separator className="flex-1 bg-gray-800" />
+              </div>
+            )}
+            <Link
+              href={`/${isGroup ? 'groups' : 'balances'}/${contactId}/expenses/${e.id}`}
+              className={cn('flex items-center justify-between', isFirstOfMonth ? 'pb-2' : 'py-2')}
+            >
+              {isSettlement && <Settlement e={e} userId={userId} />}
+              {isCurrencyConversion && <CurrencyConversion e={e} userId={userId} />}
+              {!isSettlement && !isCurrencyConversion && <Expense e={e} userId={userId} />}
+            </Link>
+          </React.Fragment>
         );
       })}
-    </>
+    </div>
   );
 };
 
@@ -79,14 +107,14 @@ const Expense: ExpenseComponent = ({ e, userId }) => {
 
   return (
     <>
-      <div className="flex items-center gap-4">
-        <div className="inline-block max-w-min text-center text-xs text-gray-500">
+      <div className="flex min-w-0 items-center gap-4">
+        <div className="inline-block w-6 shrink-0 text-center text-xs text-gray-500">
           {toUIDate(e.expenseDate)}
         </div>
-        <CategoryIcon category={e.category} className="size-5 text-gray-400" />
-        <div>
-          <p className="max-w-[180px] truncate text-sm lg:max-w-md lg:text-base">{e.name}</p>
-          <p className="flex text-center text-xs text-gray-500">
+        <CategoryIcon category={e.category} className="size-5 shrink-0 text-gray-400" />
+        <div className="min-w-0 pe-1">
+          <p className="truncate text-sm lg:text-base">{e.name}</p>
+          <p className="truncate text-xs text-gray-500">
             {t(amountStatementKey, {
               user: displayName(e.paidByUser, userId),
               currency: e.currency,
@@ -98,12 +126,12 @@ const Expense: ExpenseComponent = ({ e, userId }) => {
       <div className="min-w-10 shrink-0">
         {youPaid || 0n !== yourExpenseAmount ? (
           <>
-            <div
-              className={`text-right text-xs ${youPaid ? 'text-emerald-500' : 'text-orange-600'}`}
-            >
+            <div className={`text-right text-xs ${youPaid ? 'text-positive' : 'text-negative'}`}>
               {t(`ui.expense.statements.${youPaid ? 'you_lent' : 'you_owe'}`)}
             </div>
-            <div className={`text-right ${youPaid ? 'text-emerald-500' : 'text-orange-600'}`}>
+            <div
+              className={`xs:max-w-full max-w-32 truncate text-right ${youPaid ? 'text-positive' : 'text-negative'}`}
+            >
               {toUIString(yourExpenseAmount)}
             </div>
           </>
@@ -135,12 +163,12 @@ const Settlement: ExpenseComponent = ({ e, userId }) => {
   const payerLabel = displayName(e.paidByUser, userId);
   return (
     <div className="flex items-center gap-4">
-      <div className="inline-block max-w-min text-center text-xs text-gray-500">
+      <div className="inline-block w-6 text-center text-xs text-gray-500">
         {toUIDate(e.expenseDate)}
       </div>
-      <SettleUpIcon className="size-5 text-gray-400" />
-      <div>
-        <p className="flex text-center text-sm text-gray-400">
+      <SettleupIcon className="size-5 shrink-0 text-gray-400" />
+      <div className="min-w-0">
+        <p className="line-clamp-2 text-sm text-gray-400">
           {t(settlementStatementKey, {
             payer: payerLabel,
             receiver: receiverLabel,
@@ -156,24 +184,32 @@ const Settlement: ExpenseComponent = ({ e, userId }) => {
 const CurrencyConversion: ExpenseComponent = ({ e, userId }) => {
   const { displayName, toUIDate, t, getCurrencyHelpersCached } = useTranslationWithUtils();
 
+  if (!e.conversionTo) {
+    toast.error(t('errors.currency_conversion_malformed'));
+    console.error(
+      'Malformed currency conversion data: no conversionTo present, please report this issue.',
+    );
+    return null;
+  }
+
   const receiverId = e.expenseParticipants.find((p) => p.userId !== e.paidBy)?.userId;
   const userDetails = api.user.getUserDetails.useQuery({ userId: receiverId! });
 
   return (
-    <div className="flex items-center gap-4">
-      <div className="inline-block max-w-min text-center text-xs text-gray-500">
+    <div className="flex min-w-0 items-center gap-4">
+      <div className="inline-block w-6 shrink-0 text-center text-xs text-gray-500">
         {toUIDate(e.expenseDate)}
       </div>
-      <CurrencyConversionIcon className="size-5 text-gray-400" />
-      <div>
-        <p className="max-w-[180px] truncate text-sm lg:max-w-md lg:text-base">
+      <CurrencyConversionIcon className="size-5 shrink-0 text-gray-400" />
+      <div className="min-w-0">
+        <p className="truncate text-sm lg:text-base">
           {getCurrencyHelpersCached(e.currency).toUIString(e.amount)} ➡️{' '}
           {
             /* @ts-ignore */
             getCurrencyHelpersCached(e.conversionTo.currency).toUIString(e.conversionTo.amount)
           }
         </p>
-        <p className="flex text-center text-xs text-gray-500">
+        <p className="truncate text-xs text-gray-500">
           {t('ui.expense.statements.for_users', {
             payer: displayName(e.paidByUser, userId),
             receiver: displayName(userDetails.data, userId),

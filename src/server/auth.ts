@@ -1,7 +1,7 @@
 import { PrismaAdapter } from '@next-auth/prisma-adapter';
+import { Prisma } from '@prisma/client';
 import { type GetServerSidePropsContext } from 'next';
-import type { User } from 'next-auth';
-import { type DefaultSession, type NextAuthOptions, getServerSession } from 'next-auth';
+import { type DefaultSession, type NextAuthOptions, type User, getServerSession } from 'next-auth';
 import { type Adapter, type AdapterAccount, type AdapterUser } from 'next-auth/adapters';
 import AuthentikProvider from 'next-auth/providers/authentik';
 import EmailProvider from 'next-auth/providers/email';
@@ -11,7 +11,7 @@ import KeycloakProvider from 'next-auth/providers/keycloak';
 import { env } from '~/env';
 import { db } from '~/server/db';
 
-import { sendSignUpEmail } from './mailer';
+import { mailServerConfig, sendSignUpEmail } from './mailer';
 import { getBaseUrl } from '~/utils/api';
 import type { OAuthConfig } from 'next-auth/providers/oauth';
 
@@ -26,11 +26,13 @@ declare module 'next-auth' {
     user: DefaultSession['user'] & {
       id: number;
       currency: string;
+      defaultCurrency?: string | null;
       obapiProviderId?: string;
       bankingId?: string;
       preferredLanguage: string;
+      hiddenFriendIds: number[];
       // ...other properties
-      // role: UserRole;
+      // Role: UserRole;
     };
   }
 
@@ -40,9 +42,11 @@ declare module 'next-auth' {
     email: string;
     image: string;
     currency: string;
+    defaultCurrency?: string | null;
     obapiProviderId?: string;
     bankingId?: string;
     preferredLanguage: string;
+    hiddenFriendIds: number[];
   }
 }
 
@@ -75,22 +79,17 @@ const SplitProPrismaAdapter = (...args: Parameters<typeof PrismaAdapter>): Adapt
         throw new Error('Adapter is missing the linkAccount method.');
       }
 
-      if (account.provider === 'keycloak') {
-        // Keycloak provides some non-standard fields that do not exist in the prisma schema.
-        // We strip them out before passing them on to the original adapter.
-        const {
-          ['not-before-policy']: _notBeforePolicy,
-          refresh_expires_in: _refresh_expires_in,
-          // keep the rest
-          ...standardAccountData
-        } = account as unknown as Record<string, unknown>;
+      // OIDC providers can provide non-standard fields that do not exist in the prisma schema.
+      // We strip them out before passing them on to the original adapter.
+      const knownAccountFields = new Set<string>(Object.values(Prisma.AccountScalarFieldEnum));
 
-        // oxlint-disable-next-line typescript/no-unsafe-return
-        return originalLinkAccount(standardAccountData as AdapterAccount);
-      }
+      const sanitised = Object.fromEntries(
+        Object.entries(account as Record<string, unknown>).filter(([k]) =>
+          knownAccountFields.has(k),
+        ),
+      ) as AdapterAccount;
 
-      // Default: proceed directly
-      return originalLinkAccount(account);
+      return originalLinkAccount(sanitised);
     },
   } as Adapter;
 };
@@ -111,15 +110,17 @@ export const authOptions: NextAuthOptions = {
         ...session.user,
         id: user.id,
         currency: user.currency,
+        defaultCurrency: user.defaultCurrency,
         obapiProviderId: user.obapiProviderId,
         bankingId: user.bankingId,
         preferredLanguage: user.preferredLanguage,
+        hiddenFriendIds: user.hiddenFriendIds,
       },
     }),
     async signIn({ user, email }) {
       if (email?.verificationRequest && env.DISABLE_EMAIL_SIGNUP) {
         const existingUser = await db.user.findUnique({
-          where: { email: user.email! },
+          where: { email: user.email },
         });
 
         if (!existingUser) {
@@ -200,14 +201,7 @@ function getProviders() {
     providersList.push(
       EmailProvider({
         from: env.FROM_EMAIL,
-        server: {
-          host: env.EMAIL_SERVER_HOST,
-          port: parseInt(env.EMAIL_SERVER_PORT ?? ''),
-          auth: {
-            user: env.EMAIL_SERVER_USER,
-            pass: env.EMAIL_SERVER_PASSWORD,
-          },
-        },
+        server: mailServerConfig,
         async sendVerificationRequest({ identifier: email, url, token }) {
           const result = await sendSignUpEmail(email, url, token);
           if (!result) {
@@ -256,8 +250,8 @@ function getProviders() {
       idToken: true,
       profile(profile) {
         // This function expects a "standard" next-auth user but we override
-        // what a next-auth user is above.  The expected next-auth user must be
-        // a record that has an id, a name, an email, and an image.
+        // What a next-auth user is above.  The expected next-auth user must be
+        // A record that has an id, a name, an email, and an image.
         //
         // To work around this, we case to unknown and then `User`.
         return {
